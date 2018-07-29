@@ -12,4 +12,10 @@ buildapp: main.lisp
 		--output ld42.bin
 
 clean:
-	rm -rf ld42.bin quicklisp-manifest.txt
+	rm -rf ld42.bin quicklisp-manifest.txt build
+
+
+dist: main.lisp
+	sbcl --eval "(ql:quickload '(trivial-gamekit/distribution ld42))" \
+	     --eval "(gamekit.distribution:deliver :ld42 'cl-user::example)" \
+	     --quit

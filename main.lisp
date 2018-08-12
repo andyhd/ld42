@@ -4,11 +4,16 @@
 
 (in-package :ld42)
 
+(defstruct timer
+  (countdown nil)
+  (start nil)
+  )
+
 (defstruct beaver
   (pos (vec2 0 0))
   (goal (vec2 0 0))
   (has-log nil)
-  (busy-timer 0)
+  (busy-timer nil)
   (speed 100))
 
 (defvar *beavers* '())
@@ -57,28 +62,40 @@
   (init-dam *dam*)
   )
 
-(defun real-time-seconds ()
-  "Return seconds since point in time"
+(defun elapsed-seconds ()
   (/ (get-internal-real-time) internal-time-units-per-second))
 
+(defun start-timer (secs)
+  (make-timer :countdown secs :start (elapsed-seconds)))
+
+(defun timer-elapsed (timer)
+  (floor (- (elapsed-seconds) (timer-start timer))))
+
+(defun timer-ended (timer)
+  (cond
+    ((null timer) t)
+    ((> (timer-elapsed timer) (timer-countdown timer)))))
+
 (defun get-ticks ()
-  (let* ((now (real-time-seconds))
+  (let* ((now (elapsed-seconds))
          (ticks (- now *last-tick*)))
     (setf *last-tick* now)
     ticks))
 
-(defun collide (pos offset)
-  (let ((test-x (+ (x pos) (x offset)))
-        (test-y (+ (y pos) (y offset))))
-    (or (< test-x 0)
-        (>= test-x *canvas-width*)
-        (< test-y 0)
-        (>= test-y *canvas-height*)
-        (let ((map-x (floor test-x 32))
-              (map-y (floor test-y 32)))
-          (zerop (aref *dam* map-y map-x))))))
+(defun screen-to-map (pos)
+  (vec2 (floor (x pos) 32)
+        (floor (y pos) 32)))
 
-(defun is-log (c)
+(defun collide (pos offset)
+  (let ((test (add pos offset)))
+    (or (< (x test) 0)
+        (>= (x test) *canvas-width*)
+        (< (y test) 0)
+        (>= (y test) *canvas-height*)
+        (let ((m (screen-to-map test)))
+          (zerop (aref *dam* (floor (y m)) (floor (x m))))))))
+
+(defun log-at (c)
   (cond
     ((> 0 (x c)) nil)
     ((> 0 (y c)) nil)
@@ -90,37 +107,36 @@
   (let* ((s (beaver-pos beaver))
          (m (vec2 (floor (x s) 32) (floor (y s) 32)))
          (max-distance 20))
-    (if (is-log m)
+    (if (log-at m)
         (setf (beaver-goal beaver) s)
         ; else
         (block :search
-               (dotimes (d (- max-distance 1))
-                 (incf d) ; for d=1; i < maxdistance
-                 (dotimes (i (+ d 1)) ; for i=0; i < d + 1
+               (dotimes (d (- max-distance 1)) (incf d)
+                 (dotimes (i (+ d 1))
                    (let ((c (vec2 (- (x m) (+ d i)) (- (y m) i))))
-                     (if (is-log c)
+                     (if (log-at c)
                          (progn
                            (setf (beaver-goal beaver) (mult c 32))
                            (return-from :search))))
                    (let ((c (vec2 (+ (x m) (- d i)) (+ (y m) i))))
-                     (if (is-log c)
+                     (if (log-at c)
                          (progn
                            (setf (beaver-goal beaver) (mult c 32))
                            (return-from :search)))))
-                 (dotimes (i (- d 1)) ; for i=1; i < d
-                   (incf i)
+                 (dotimes (i (- d 1)) (incf i)
                    (let ((c (vec2 (- (x m) i) (+ (y m) (- d i)))))
-                     (if (is-log c)
+                     (if (log-at c)
                          (progn
                            (setf (beaver-goal beaver) (mult c 32))
                            (return-from :search))))
                    (let ((c (vec2 (+ (x m) (- d i)) (- (y m) i))))
-                     (if (is-log c)
+                     (if (log-at c)
                          (progn
                            (setf (beaver-goal beaver) (mult c 32))
                            (return-from :search))))))))))
 
 (defun add-beaver ()
+  ; place a beaver at random on one of the screen edges
   (let* ((edge (random 4))
          (pos (vec2
                 (case edge
@@ -132,17 +148,26 @@
                   (3 (- *canvas-height* 32))
                   (otherwise (random *canvas-height*)))))
          (beaver (make-beaver :pos pos)))
+    ; add to the list of beavers
     (setf *beavers* (cons beaver *beavers*))
+    ; say hello
     (or *mute* (play-sound :add-beaver))
+    ; pick a log to steal
     (set-goal beaver)))
 
 (defun reached-goal (b)
+  ; check log hasn't been taken already
+  (if (not (log-at (beaver-goal b)))
+    ; pick another log
+    (set-goal b))
+  ; are we there yet?
   (let ((dist (subt (beaver-goal b) (beaver-pos b))))
     (and (< (abs (x dist)) 1)
          (< (abs (y dist)) 1)))
   )
 
 (defun move-to-goal (b ticks)
+  ; move straight towards the log
   (let* ((dist (subt (beaver-goal b) (beaver-pos b)))
          (sqdist (mult dist dist))
          (hyp (sqrt (+ (x sqdist) (y sqdist))))
@@ -152,21 +177,57 @@
     )
   )
 
+(defun in-canvas (pos)
+  (and (< -1 (+ (x pos) 32))
+       (< -1 (+ (y pos) 32))
+       (> (+ 1 *canvas-width*) (x pos))
+       (> (+ 1 *canvas-height*) (y pos))))
+
+(defun run-away (b ticks)
+  ; move away from the player
+  (let* ((dist (subt (beaver-pos *player*) (beaver-pos b)))
+         (sqdist (mult dist dist))
+         (hyp (sqrt (+ (x sqdist)  (y sqdist))))
+         (move (mult (div dist hyp) ticks (beaver-speed b)))
+         (dest (subt (beaver-pos b) move))
+         )
+    (if (in-canvas dest)
+        (setf (beaver-pos b) dest)
+        ; wait a while before coming back
+        (progn
+          (setf (beaver-has-log b) nil)
+          (setf (beaver-busy-timer b) (start-timer 5))
+          ))
+    )
+  )
+
+(defun take-log (b)
+  ; remove log from dam
+  (let ((m (screen-to-map (beaver-goal b))))
+    (setf (aref *dam* (floor (y m)) (floor (x m))) 0))
+  (setf (beaver-has-log b) t)
+  (setf (beaver-busy-timer b) (start-timer 3)))
+
 (defun update-beaver (b ticks)
-  (if (not (reached-goal b))
-      (move-to-goal b ticks)
-      ;(take-log b)
-      )
+  (cond
+    ; wait while busy removing log
+    ((not (timer-ended (beaver-busy-timer b))) nil)
+    ; if holding a log, run away
+    ((beaver-has-log b) (run-away b ticks))
+    ; steal a log
+    ((reached-goal b) (take-log b))
+    ; go find a log
+    (t (move-to-goal b ticks))
+    )
   )
 
 (defmethod act ((app ld42))
   (let ((move (vec2 0 0))
         (offset (vec2 0 0))
         (ticks (get-ticks))
-        (now (real-time-seconds))
+        (now (elapsed-seconds))
         )
-    (if (< *time-to-next-beaver*
-           (- now *last-beaver*))
+    (if (< *time-to-next-beaver* (- now *last-beaver*))
         (progn
           ;(add-beaver)
           (setf *last-beaver* now)))

@@ -18,41 +18,47 @@
   (speed 100))
 
 (defvar *beavers* '())
+(defvar *beavers-bopped* 0)
 (defvar *black* (vec4 0 0 0 1))
 (defvar *blue* (vec4 0.31 0.455 0.58 1))
 (defvar *canvas-height* 480)
 (defvar *canvas-width* 640)
 (defvar *dam* (make-array '(15 20)))
+(defvar *game-over* nil)
 (defvar *keys* '())
 (defvar *last-beaver* 0)
 (defvar *last-tick* 0)
+(defvar *logs-remaining* 0)
 (defvar *mute* nil)
 (defvar *player* (make-beaver :pos (vec2 320 240)))
 (defvar *return-time* 20)
 (defvar *steal-time* 5)
 (defvar *time-to-next-beaver* 30)
 
-(register-resource-package :keyword
-                                   (asdf:system-relative-pathname :ld42 "assets/"))
+(defgame ld42 () ()
+  (:viewport-width *canvas-width*)
+  (:viewport-height *canvas-height*)
+  (:viewport-title "LD42"))
+
+(register-resource-package :keyword (asdf:system-relative-pathname :ld42 "assets/"))
 
 (define-image :player "beaver.png")
 (define-sound :add-beaver "add-beaver.wav")
 (define-sound :bop "bop.wav")
 (define-sound :ouch "ouch.wav")
 
-(defgame ld42 () ()
-  (:viewport-width *canvas-width*)
-  (:viewport-height *canvas-height*)
-  (:viewport-title "LD42"))
-
 (defun init-dam (dam)
+  (setf *logs-remaining* 0)
   (dotimes (y (array-dimension dam 0))
     (dotimes (x (array-dimension dam 1))
       (if (or (< x 3) (> x 16))
           (setf (aref dam y x) 2))
       (if (and (< 2 x 17)
                (< 1 y 13))
-          (setf (aref dam y x) 1)))))
+          (progn
+            (setf (aref dam y x) 1)
+            (incf *logs-remaining*)
+            )))))
 
 (defun bind-key (key)
   (setf *keys* (append *keys* (list (cons key 0))))
@@ -205,6 +211,7 @@
   ; remove the log from the dam
   (let ((goal (screen-to-map (beaver-goal b))))
     (if (equal 3 (tile-at goal))
+        (decf *logs-remaining*)
         (setf (tile-at goal) 0)))
   ; move away from the player
   (let* ((dist (subt (beaver-pos *player*) (beaver-pos b)))
@@ -264,10 +271,15 @@
   (play-sound :bop)
   (setf (beaver-bopped beaver) t)
   (play-sound :ouch)
+  (if (equal 3 (tile-at (beaver-goal beaver)))
+      (setf (tile-at (beaver-goal beaver)) 1))
   (setf *beavers* (remove beaver *beavers*))
+  (incf *beavers-bopped*)
   )
 
 (defmethod act ((app ld42))
+  (if (>= 0 *logs-remaining*)
+      (setf *game-over* t))
   (let ((move (vec2 0 0))
         (offset (vec2 0 0))
         (ticks (get-ticks))
@@ -275,7 +287,7 @@
         )
     (if (< *time-to-next-beaver* (- now *last-beaver*))
         (progn
-          ;(add-beaver)
+          (add-beaver)
           (setf *last-beaver* now)))
     (if (pressing :up)
         (progn
@@ -323,6 +335,23 @@
               :width 32
               :height 32))
 
+(defun get-digits (num)
+  (cond
+    ((> 0 num) nil)
+    ((> 10 num) (list num))
+    (t (append (get-digits (floor num 10)) (list (mod num 10))))))
+
+(defun draw-score ()
+  (draw-image (vec2 10 10) :player :origin (vec2 0 192) :width 96 :height 32)
+  (let ((offset 0))
+    (dolist (digit (get-digits *logs-remaining*))
+      (draw-image (vec2 (+ 96 (* 18 offset)) 10) :player
+                  :origin (vec2 (+ 96 (* 32 digit)) 192)
+                  :width 32
+                  :height 32)
+      (incf offset)))
+  )
+
 (defmethod draw ((app ld42))
   (draw-rect
     (vec2 0 0) *canvas-width* *canvas-height*
@@ -330,4 +359,5 @@
   (draw-map)
   (draw-beaver *player* (vec2 0 0))
   (mapcar #'draw-beaver *beavers*)
+  (draw-score)
   )

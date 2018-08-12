@@ -14,6 +14,7 @@
   (goal (vec2 0 0))
   (has-log nil)
   (busy-timer nil)
+  (bopped nil)
   (speed 100))
 
 (defvar *beavers* '())
@@ -27,6 +28,8 @@
 (defvar *last-tick* 0)
 (defvar *mute* nil)
 (defvar *player* (make-beaver :pos (vec2 320 240)))
+(defvar *return-time* 20)
+(defvar *steal-time* 5)
 (defvar *time-to-next-beaver* 30)
 
 (register-resource-package :keyword
@@ -34,6 +37,8 @@
 
 (define-image :player "beaver.png")
 (define-sound :add-beaver "add-beaver.wav")
+(define-sound :bop "bop.wav")
+(define-sound :ouch "ouch.wav")
 
 (defgame ld42 () ()
   (:viewport-width *canvas-width*)
@@ -59,6 +64,7 @@
   (bind-key :down)
   (bind-key :left)
   (bind-key :right)
+  (bind-key :space)
   (init-dam *dam*)
   )
 
@@ -86,22 +92,27 @@
   (vec2 (floor (x pos) 32)
         (floor (y pos) 32)))
 
+(defun tile-at (pos)
+  (cond
+    ((> 0 (x pos)) nil)
+    ((> 0 (y pos)) nil)
+    ((< 19 (x pos)) nil)
+    ((< 14 (y pos)) nil)
+    (t (aref *dam* (floor (y pos)) (floor (x pos))))))
+
+(defun (setf tile-at) (new-value pos)
+  (setf (aref *dam* (floor (y pos))  (floor (x pos))) new-value))
+
 (defun collide (pos offset)
   (let ((test (add pos offset)))
     (or (< (x test) 0)
         (>= (x test) *canvas-width*)
         (< (y test) 0)
         (>= (y test) *canvas-height*)
-        (let ((m (screen-to-map test)))
-          (zerop (aref *dam* (floor (y m)) (floor (x m))))))))
+        (zerop (tile-at (screen-to-map test))))))
 
-(defun log-at (c)
-  (cond
-    ((> 0 (x c)) nil)
-    ((> 0 (y c)) nil)
-    ((< 19 (x c)) nil)
-    ((< 14 (y c)) nil)
-    (t (equal 1 (aref *dam* (floor (y c)) (floor (x c)))))))
+(defun log-at (pos)
+  (equal 1 (tile-at pos)))
 
 (defun set-goal (beaver)
   (let* ((s (beaver-pos beaver))
@@ -167,13 +178,20 @@
   )
 
 (defun move-to-goal (b ticks)
-  ; move straight towards the log
-  (let* ((dist (subt (beaver-goal b) (beaver-pos b)))
-         (sqdist (mult dist dist))
-         (hyp (sqrt (+ (x sqdist) (y sqdist))))
-         (move (mult (div dist hyp) ticks (beaver-speed b)))
+  ; move straight towards the log unless the player is closer, then avoid
+  (let* ((gdist (subt (beaver-goal b) (beaver-pos b)))
+         (pdist (subt (beaver-pos *player*) (beaver-pos b)))
+         (gsqdist (mult gdist gdist))
+         (psqdist (mult pdist pdist))
+         (ghyp (sqrt (+ (x gsqdist) (y gsqdist))))
+         (phyp (sqrt (+ (x psqdist) (y psqdist))))
+         ;(move (mult (div dist hyp) ticks (beaver-speed b)))
          )
-    (setf (beaver-pos b) (add move (beaver-pos b)))
+    (setf (beaver-pos b)
+          (add (cond
+                 ((> ghyp phyp) (mult (div pdist phyp) -1 ticks (beaver-speed b)))
+                 (t (mult (div gdist ghyp) ticks (beaver-speed b))))
+               (beaver-pos b)))
     )
   )
 
@@ -184,6 +202,10 @@
        (> (+ 1 *canvas-height*) (y pos))))
 
 (defun run-away (b ticks)
+  ; remove the log from the dam
+  (let ((goal (screen-to-map (beaver-goal b))))
+    (if (equal 3 (tile-at goal))
+        (setf (tile-at goal) 0)))
   ; move away from the player
   (let* ((dist (subt (beaver-pos *player*) (beaver-pos b)))
          (sqdist (mult dist dist))
@@ -196,17 +218,16 @@
         ; wait a while before coming back
         (progn
           (setf (beaver-has-log b) nil)
-          (setf (beaver-busy-timer b) (start-timer 5))
+          (setf (beaver-busy-timer b) (start-timer *return-time*))
           ))
     )
   )
 
 (defun take-log (b)
   ; remove log from dam
-  (let ((m (screen-to-map (beaver-goal b))))
-    (setf (aref *dam* (floor (y m)) (floor (x m))) 0))
+  (setf (tile-at (screen-to-map (beaver-goal b))) 3)
   (setf (beaver-has-log b) t)
-  (setf (beaver-busy-timer b) (start-timer 3)))
+  (setf (beaver-busy-timer b) (start-timer *steal-time*)))
 
 (defun update-beaver (b ticks)
   (cond
@@ -221,6 +242,31 @@
     )
   )
 
+(defun pressing (key)
+  (not (zerop (cdr (assoc key *keys*)))))
+
+(defun intersects (a b)
+  (not (or (> (x a) (z b))
+           (> (y a) (w b))
+           (< (z a) (x b))
+           (< (w a) (y b)))))
+
+(defun touching (beaver)
+  ; is the player touching a beaver?
+  (let ((p (beaver-pos *player*))
+        (b (beaver-pos beaver)))
+    (intersects
+      (vec4 (x p) (y p) (+ (x p) 32) (+ (y p) 32))
+      (vec4 (x b) (y b) (+ (x b) 32) (+ (y b) 32)))))
+
+(defun bop (beaver)
+  ; bop a beaver on the head to knock him out
+  (play-sound :bop)
+  (setf (beaver-bopped beaver) t)
+  (play-sound :ouch)
+  (setf *beavers* (remove beaver *beavers*))
+  )
+
 (defmethod act ((app ld42))
   (let ((move (vec2 0 0))
         (offset (vec2 0 0))
@@ -231,21 +277,25 @@
         (progn
           ;(add-beaver)
           (setf *last-beaver* now)))
-    (if (not (zerop (cdr (assoc :up *keys*))))
+    (if (pressing :up)
         (progn
           (setf (y offset) 32)
           (incf (y move))))
-    (if (not (zerop (cdr (assoc :down *keys*))))
+    (if (pressing :down)
         (decf (y move)))
-    (if (not (zerop (cdr (assoc :left *keys*))))
+    (if (pressing :left)
         (decf (x move)))
-    (if (not (zerop (cdr (assoc :right *keys*))))
+    (if (pressing :right)
         (progn
           (setf (x offset) 32)
           (incf (x move))))
     (setf move (mult move ticks (beaver-speed *player*)))
     (if (not (collide (add move (beaver-pos *player*)) offset))
         (setf (beaver-pos *player*) (add move (beaver-pos *player*))))
+    ; if you're touching a beaver, bop it
+    (let ((victim (first (remove-if-not #'touching *beavers*))))
+      (if (and victim (not (beaver-bopped victim)))
+          (bop victim)))
     (dolist (b *beavers*)
       (update-beaver b ticks))))
 
@@ -257,9 +307,11 @@
                       :origin (vec2 0 128)
                       :width 32
                       :height 32))
-      (if (equal 1 (aref *dam* y x))
+      (if (or (equal 1 (aref *dam* y x))
+              (equal 3 (aref *dam* y x))
+              )
           (draw-image (vec2 (* 32 x) (* 32 y)) :player
-                      :origin (vec2 0 96)
+                      :origin (vec2 0 64)
                       :width 32
                       :height 32)
           ))))

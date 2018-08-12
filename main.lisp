@@ -31,8 +31,9 @@
 (defvar *mute* nil)
 (defvar *player* (make-beaver :pos (vec2 320 240)))
 (defvar *return-time* 20)
+(defvar *show-title* t)
 (defvar *steal-time* 5)
-(defvar *time-to-next-beaver* 30)
+(defvar *time-to-next-beaver* 5)
 
 (defgame ld42 () ()
   (:viewport-width *canvas-width*)
@@ -42,6 +43,7 @@
 (register-resource-package :keyword (asdf:system-relative-pathname :ld42 "assets/"))
 
 (define-image :player "beaver.png")
+(define-image :title "title.png")
 (define-sound :add-beaver "add-beaver.wav")
 (define-sound :bop "bop.wav")
 (define-sound :ouch "ouch.wav")
@@ -282,8 +284,25 @@
   (incf *beavers-bopped*)
   )
 
-(defmethod act ((app ld42))
-  (if (>= 0 (logs-remaining))
+(defun handle-title-screen ()
+  (if (and (pressing :space) *show-title*)
+      (progn
+        (setf *show-title* nil)
+        (setf *game-over* nil)
+        (setf *beavers* nil)
+        (init-dam *dam*)
+        )))
+
+(defun handle-game-over ()
+  (if (and (pressing :space) *game-over*)
+      (progn
+        (setf *show-title* t)
+        (setf *game-over* nil)
+        )))
+
+(defun handle-game ()
+  (if (and (>= 0 (logs-remaining))
+           (not *game-over*))
       (setf *game-over* t))
   (let ((move (vec2 0 0))
         (offset (vec2 0 0))
@@ -307,7 +326,7 @@
           (setf (x offset) 32)
           (incf (x move))))
     (setf move (mult move ticks (beaver-speed *player*)))
-    (if (not (collide (add move (beaver-pos *player*)) offset))
+    (if t
         (setf (beaver-pos *player*) (add move (beaver-pos *player*))))
     ; if you're touching a beaver, bop it
     (let ((victim (first (remove-if-not #'touching *beavers*))))
@@ -315,6 +334,12 @@
           (bop victim)))
     (dolist (b *beavers*)
       (update-beaver b ticks))))
+
+(defmethod act ((app ld42))
+  (cond
+    (*show-title* (handle-title-screen))
+    (*game-over* (handle-game-over))
+    (t (handle-game))))
 
 (defun draw-map ()
   (dotimes (y (array-dimension *dam* 0))
@@ -357,7 +382,7 @@
       (incf offset)))
   )
 
-(defmethod draw ((app ld42))
+(defun draw-game-screen ()
   (draw-rect
     (vec2 0 0) *canvas-width* *canvas-height*
     :fill-paint *blue*)
@@ -365,4 +390,24 @@
   (draw-beaver *player* (vec2 0 0))
   (mapcar #'draw-beaver *beavers*)
   (draw-score)
+  )
+
+(defun draw-title-screen ()
+  (draw-image (vec2 0 0) :title))
+
+(defun draw-game-over-screen ()
+  (draw-game-screen)
+  (draw-rect (vec2 0 0) *canvas-width* *canvas-height*
+             :fill-paint (vec4 0 0 0 0.5))
+  (draw-image (vec2 80 192) :player
+              :origin (vec2 0 224)
+              :width 480
+              :height 96))
+
+(defmethod draw ((app ld42))
+  (cond
+    (*show-title* (draw-title-screen))
+    (*game-over* (draw-game-over-screen))
+    (t (draw-game-screen))
+    )
   )

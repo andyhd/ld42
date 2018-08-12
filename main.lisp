@@ -28,7 +28,6 @@
 (defvar *keys* '())
 (defvar *last-beaver* 0)
 (defvar *last-tick* 0)
-(defvar *logs-remaining* 0)
 (defvar *mute* nil)
 (defvar *player* (make-beaver :pos (vec2 320 240)))
 (defvar *return-time* 20)
@@ -48,16 +47,14 @@
 (define-sound :ouch "ouch.wav")
 
 (defun init-dam (dam)
-  (setf *logs-remaining* 0)
   (dotimes (y (array-dimension dam 0))
     (dotimes (x (array-dimension dam 1))
       (if (or (< x 3) (> x 16))
           (setf (aref dam y x) 2))
       (if (and (< 2 x 17)
-               (< 1 y 13))
+               (< 3 y 11))
           (progn
             (setf (aref dam y x) 1)
-            (incf *logs-remaining*)
             )))))
 
 (defun bind-key (key)
@@ -207,11 +204,19 @@
        (> (+ 1 *canvas-width*) (x pos))
        (> (+ 1 *canvas-height*) (y pos))))
 
+(defun logs-remaining ()
+  (let ((total 0))
+    (dotimes (y (array-dimension *dam* 0))
+      (dotimes (x (array-dimension *dam* 1))
+        (if (or (equal 1 (tile-at (vec2 x y)))
+                (equal 3 (tile-at (vec2 x y))))
+            (incf total))))
+    total))
+
 (defun run-away (b ticks)
   ; remove the log from the dam
   (let ((goal (screen-to-map (beaver-goal b))))
     (if (equal 3 (tile-at goal))
-        (decf *logs-remaining*)
         (setf (tile-at goal) 0)))
   ; move away from the player
   (let* ((dist (subt (beaver-pos *player*) (beaver-pos b)))
@@ -278,7 +283,7 @@
   )
 
 (defmethod act ((app ld42))
-  (if (>= 0 *logs-remaining*)
+  (if (>= 0 (logs-remaining))
       (setf *game-over* t))
   (let ((move (vec2 0 0))
         (offset (vec2 0 0))
@@ -344,7 +349,7 @@
 (defun draw-score ()
   (draw-image (vec2 10 10) :player :origin (vec2 0 192) :width 96 :height 32)
   (let ((offset 0))
-    (dolist (digit (get-digits *logs-remaining*))
+    (dolist (digit (get-digits (logs-remaining)))
       (draw-image (vec2 (+ 96 (* 18 offset)) 10) :player
                   :origin (vec2 (+ 96 (* 32 digit)) 192)
                   :width 32

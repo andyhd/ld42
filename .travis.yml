@@ -25,7 +25,7 @@ os:
   - osx
 
 install:
-  - curl -L http://bodge.borodust.org/files/install.sh | sh
+  - curl -L http://bodge.borodust.org/files/install.sh | sh -s ccl
 
 script:
   - >
